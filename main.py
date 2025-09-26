@@ -113,8 +113,6 @@ while running:
                 slot_counts[slot_index] += 1
                 # Score uses 1000 / row 10 Pascal's value
                 row_10_value = pascal_values[rows - 2][slot_index + 1]  # Shift by 1 to match slot_pegs
-                score += (pow(2,11) / row_10_value)
-                print(f"Score: {score:.2f}")  # Display score in console
                 balls.remove(ball)  # Remove ball after landing
 
     # Draw everything
