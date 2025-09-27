@@ -23,17 +23,23 @@ font = pygame.font.SysFont(None, 20)  # Use default font to avoid 'arial' issues
 
 # Line segment intersection functions
 def on_segment(p, q, r):
+    if p is None or q is None or r is None:
+        return False
     if min(p[0], r[0]) <= q[0] <= max(p[0], r[0]) and min(p[1], r[1]) <= q[1] <= max(p[1], r[1]):
         return True
     return False
 
 def orientation(p, q, r):
+    if p is None or q is None or r is None:
+        return 0  # Treat as colinear (no intersection) if any point is None
     val = (q[1] - p[1]) * (r[0] - q[0]) - (q[0] - p[0]) * (r[1] - q[1])
     if val == 0:
         return 0
     return 1 if val > 0 else 2
 
 def do_intersect(p1, q1, p2, q2):
+    if p1 is None or q1 is None or p2 is None or q2 is None:
+        return False  # No intersection if any point is None
     o1 = orientation(p1, q1, p2)
     o2 = orientation(p1, q1, q2)
     o3 = orientation(p2, q2, p1)
@@ -56,18 +62,32 @@ rows = 12  # 12 rows for Pascal's Triangle (row 0 to row 11)
 peg_spacing_x = 70
 peg_spacing_y = 40
 start_y = 120  # Starting y-position for pegs
+peg_paths = []  # Store paths for each peg: [(left_start, left_end), (right_start, right_end)]
 for row in range(rows):
     num_pegs = row + 1
     y = start_y + row * peg_spacing_y
     row_width = num_pegs * peg_spacing_x
     start_x = (WIDTH - row_width) // 2 + peg_spacing_x // 2  # Center the row
     row_values = []
+    start_index = row * (row + 1) // 2
     for col in range(num_pegs):
         x = start_x + col * peg_spacing_x
         pegs.append((x, y))
         # Calculate binomial coefficient C(row, col)
         value = math.comb(row, col)
         row_values.append(value)
+        # Calculate paths to next row (except for row 11)
+        paths = []
+        if row < rows - 1:
+            next_start = (row + 1) * (row + 2) // 2
+            left_index = next_start + col
+            right_index = next_start + col + 1
+            left_peg = pegs[left_index]
+            right_peg = pegs[right_index]
+            paths = [(pegs[start_index + col], left_peg), (pegs[start_index + col], right_peg)]
+        else:
+            paths = [(None, None), (None, None)]  # No paths for row 11
+        peg_paths.append(paths)
     pascal_values.append(row_values)
 
 # Slots: 10 slots (12 pegs in row 11, remove 1 from each end)
@@ -76,6 +96,7 @@ slot_counts = [0] * len(slots)  # Track landings in each slot
 ball_radius = 10
 balls = []  # List of balls, each with x, y, speed_y, direction, dropped, collided_pegs
 score = 0
+modifier = 1  # Start with 1x multiplier
 gravity = 0.5  # Gravity for ball physics
 bounce = -0.3  # For peg bounces
 running = True
@@ -94,25 +115,16 @@ while running:
                 # Check for blocked paths if line is drawn
                 if line_state is not None:
                     print("Checking blocked paths before spawning new ball...")
-                    for r in range(rows - 1):
+                    for r in range(rows - 2):  # Skip row 11 to avoid None paths
                         start_index = r * (r + 1) // 2
                         for c in range(r + 1):
                             peg_index = start_index + c
-                            peg = pegs[peg_index]
-                            next_start = (r + 1) * (r + 2) // 2
-                            left_index = next_start + c
-                            right_index = next_start + c + 1
-                            left_peg = pegs[left_index]
-                            right_peg = pegs[right_index]
+                            left_path, right_path = peg_paths[peg_index]
                             # Left path
-                            p2 = peg
-                            q2 = left_peg
-                            if do_intersect(line_p1, line_q1, p2, q2):
+                            if do_intersect(line_p1, line_q1, left_path[0], left_path[1]):
                                 print(f"Row {r} Col {c} left path blocked")
                             # Right path
-                            p2 = peg
-                            q2 = right_peg
-                            if do_intersect(line_p1, line_q1, p2, q2):
+                            if do_intersect(line_p1, line_q1, right_path[0], right_path[1]):
                                 print(f"Row {r} Col {c} right path blocked")
                 # Spawn a new ball
                 balls.append({
@@ -159,8 +171,35 @@ while running:
                         peg_index += 1
                         continue  # Skip pegs already hit
                     if (ball['x'] - peg[0])**2 + (ball['y'] - peg[1])**2 < (ball_radius + 5)**2:
+                        # Calculate row and column for debugging
+                        r = 0
+                        while r * (r + 1) // 2 <= peg_index:
+                            r += 1
+                        r -= 1
+                        c = peg_index - r * (r + 1) // 2
+                        # Get paths from peg_paths
+                        left_path, right_path = peg_paths[peg_index]
+                        left_blocked = False
+                        right_blocked = False
+                        if line_state is not None and row < rows - 2:  # Ensure next row exists
+                            # Check left path
+                            if do_intersect(line_p1, line_q1, left_path[0], left_path[1]):
+                                left_blocked = True
+                                print(f"Row {r} Col {c}: Left path blocked, directing to left peg")
+                            # Check right path
+                            if do_intersect(line_p1, line_q1, right_path[0], right_path[1]):
+                                right_blocked = True
+                                print(f"Row {r} Col {c}: Right path blocked, directing to right peg")
+                        # Set direction to move toward blocked peg
+                        if left_blocked and not right_blocked:
+                            ball['direction'] = -1  # Move to left peg (blocked)
+                        elif right_blocked and not left_blocked:
+                            ball['direction'] = 1  # Move to right peg (blocked)
+                        elif left_blocked and right_blocked:
+                            ball['direction'] = random.choice([-1, 1])  # Random if both blocked
+                        else:
+                            ball['direction'] = random.choice([-1, 1])  # Random if neither blocked
                         ball['speed_y'] *= bounce
-                        ball['direction'] = random.choice([-1, 1])  # Random bounce direction
                         ball['collided_pegs'].add(peg)  # Mark peg as hit
                         peg_index += 1
                         break  # Only one collision per frame
@@ -188,9 +227,10 @@ while running:
                 slot_counts[slot_index] += 1
                 # Score uses 1000 / row 10 Pascal's value
                 row_10_value = pascal_values[rows - 2][slot_index + 1]  # Shift by 1 to match slot_pegs
-                score += (1000 / row_10_value)
+                score += (1000 / row_10_value) * modifier
                 print(f"Score: {score:.2f}")  # Display score in console
                 balls.remove(ball)  # Remove ball after landing
+                modifier = random.choice([1, 2, 0.5])  # Random modifier for next ball
 
     # Draw everything
     screen.fill(BLACK)
@@ -273,5 +313,6 @@ while running:
     pygame.display.flip()
     clock.tick(60)
 
+    
 pygame.quit()
 sys.exit()
